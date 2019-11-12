@@ -1,0 +1,6 @@
+[submodule "ww2ogg"]
+	path = ww2ogg
+	url = https://github.com/hcs64/ww2ogg
+[submodule "revorb-nix"]
+	path = revorb-nix
+	url = https://github.com/jonboydell/revorb-nix
