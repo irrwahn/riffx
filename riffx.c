@@ -100,14 +100,19 @@ int mkdirp(const char *pathname, mode_t mode) {
 
 /* mem_mem
  * Locate needle of length nlen in haystack of length hlen.
- * Returns pointer to first occurrence of needle in haystack or NULL.
- * Uses the Boyer-Moore search algorithm.
- *   Cf. http://www-igm.univ-mlv.fr/~lecroq/string/node14.html
+ * Returns a pointer to the first occurrence of needle in haystack, or
+ * haystack for a needle of zero length, or NULL if needle was not found
+ * in haystack.
+ *
+ * Uses the Boyer-Moore-Horspool search algorithm, see
+ * https://en.wikipedia.org/wiki/Boyer–Moore–Horspool_algorithm
+ *
+ * For our tiny needles and non-pathologic haystacks this borders on
+ * overkill, but meh.
  */
 static void *mem_mem(const void *haystack, size_t hlen,
                      const void *needle, size_t nlen) {
-    size_t k;
-    int skip[256];
+    size_t k, skip[256];
     const uint8_t *hst = (const uint8_t *)haystack;
     const uint8_t *ndl = (const uint8_t *)needle;
 
