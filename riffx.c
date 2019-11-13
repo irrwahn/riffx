@@ -7,9 +7,10 @@
  *  - refactoring, reformatting
  *  - some minor changes and optimizations
  *
- * Find anything that looks remotely like a RIFF data stream and dump it
- * into separate files, named using extracted labels, if found.   Useful
- * e.g. for extracting audio streams from game files like Unreal pck.
+ * Traverse input file(s) and dump anything that looks remotely like a
+ * RIFF data stream into separate output files, named using extracted
+ * labels, if applicable.  Useful e.g. for extracting audio streams from
+ * game files like Unreal *.pck.
  *
  * NOTE: The extracted raw RIFF streams most likely will need some form
  * of post-processing to be useful.  E.g. for the Audiokinetic Wwise
@@ -47,13 +48,6 @@
 #include <sys/stat.h>
 
 
-/*
- * USE_BASENAME
- *  0: retain directory structure: a/b/foo.in -> output/a/b/foo/042.riff
- *  1: flat output directory:      a/b/foo.in -> output/001_foo_042.riff
- */
-#define USE_BASENAME 0
-
 /* dump filename suffix */
 #define SUFFIX      ".riff"
 
@@ -65,6 +59,9 @@
 #define LABL        "labl"
 #define LABL_LEN    4
 #define LABL_SKIP   8
+
+
+#define LOG(...)    fprintf(stderr, __VA_ARGS__)
 
 
 /* mkdirp
@@ -134,86 +131,134 @@ static void *mem_mem(const void *haystack, size_t hlen,
     return NULL;
 }
 
-static void dump(const char *prefix, int id, uint8_t *b, size_t len) {
+/*
+ * Dump RIFF stream.
+ * Write a data blob of length len starting at b to a file whose name is
+ * constructed from prefix and an extracted label, or, in absence of a
+ * label, the provided numeric id.
+ */
+static int dump(const char *prefix, size_t id, const uint8_t *b, size_t len) {
     int fd;
     char of[strlen(prefix) + 255];
-    char *lab = NULL;
+    const char *lab = NULL;
     size_t ml = len;
-    uint8_t *mp = b;
+    const uint8_t *mp = b;
 
-    do {
-        mp = mem_mem(mp, ml, LABL, LABL_LEN);
-        if (mp) {
-            size_t ll;
-            mp += LABL_LEN;
-            ll = *(uint32_t *)mp;
-            mp += LABL_SKIP;
-            ml = len - (mp - b);
-            // The label we want? 200 is a magic number, 7 isn't (7 > 4 + 2)
-            if (ll <= 200 && ll >= 7)
-                lab = (char *)mp;
-        }
-    } while (mp);
+    /* Try to find a suitable "labl" chunk: */
+    while (NULL != (mp = mem_mem(mp, ml, LABL, LABL_LEN))) {
+        size_t ll;
+        mp += LABL_LEN;
+        ll = *(uint32_t *)mp; /* works only on LE arch! */
+        mp += LABL_SKIP;
+        ml = len - (mp - b);
+        /* The label we want? 200 is a magic number, 7 isn't (7 > 4 + 2). */
+        if (ll <= 200 && ll >= 7)
+            lab = (const char *)mp;
+    }
 
+    /* Construct file name from prefix and label or id: */
     if (lab)
         snprintf(of, sizeof of, "%s%s%s", prefix, lab, SUFFIX);
     else
-        snprintf(of, sizeof of, "%s%06d%s", prefix, id, SUFFIX);
+        snprintf(of, sizeof of, "%s%06zu%s", prefix, id, SUFFIX);
+    //LOG("Dumping %lu bytes to %s\n", len, of);
 
-    //fprintf(stderr, "Dumping %lu bytes to %s\n", len, of);
+    /* Caveat: This will overwrite any existing file with the same name! */
     fd = creat(of, 0644);
     if (0 > fd){
-        fprintf(stderr, "Failed to create %s: %s\n", of, strerror(errno));
+        LOG("Failed to create %s: %s\n", of, strerror(errno));
+        return -1;
     } else {
         write(fd, b, len);
         close(fd);
     }
+    return 0;
 }
 
+/*
+ * Traverse file fd and dump anything that looks like a RIFF stream.
+ */
+int extract(int fd, const char *pfx) {
+    size_t id = 0;
+    off_t fsize, rsize;
+    uint8_t *mfile, *riff, *next;
+
+    fsize = lseek(fd, 0, SEEK_END);
+    lseek(fd, 0, SEEK_SET);
+    mfile = mmap(NULL, fsize, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (mfile == MAP_FAILED) {
+        LOG("mmap failed: %s\n", strerror(errno));
+        return -1;
+    }
+    riff = mem_mem(mfile, fsize, RIFF, RIFF_LEN);
+    while (NULL != riff) {
+        LOG("\rEntry %zu ", id);
+        rsize = fsize - (riff - mfile);
+        next = mem_mem(riff + RIFF_LEN, rsize - RIFF_LEN, RIFF, RIFF_LEN);
+        /* Instead of id we could also pass the file offset (riff-mfile). */
+        dump(pfx, id, riff, next ? next - riff : rsize);
+        riff = next;
+        ++id;
+    }
+    munmap(mfile, fsize);
+    return id;
+}
 
 int main(int argc, char *argv[]) {
-    int i;
+    int i, argidx = 1;
+    int use_basename = 0;
     const char *odir;
     struct stat st;
-    const char *usemsg  = "Usage: %s infile ... [outdir]\n";
+    const char *usemsg = "Usage: %s [-b] infile ... [outdir]\n"
+                         "  -b : create flat output hierarchy\n";
 
-    if (argc < 2) {
-        fprintf(stderr, usemsg, argv[0]);
+    if (argc - argidx < 1) {
+        LOG(usemsg, argv[0]);
         exit(EXIT_FAILURE);
     }
 
-    if (0 != stat(argv[argc - 1], &st) || S_ISDIR(st.st_mode))
+    /* Check for -b (use basename) option:
+     * 0: retain directory structure:   a/b/foo.in -> output/a/b/foo/042.riff
+     * 1: create flat output directory: a/b/foo.in -> output/001_foo_042.riff
+     */
+    if (0 == strcmp(argv[argidx], "-b")) {
+        use_basename = 1;
+        ++argidx;
+    }
+    if (argc - argidx < 1) {
+        LOG(usemsg, argv[0]);
+        exit(EXIT_FAILURE);
+    }
+
+    /* If the last argument does not designate an existing file, we
+     * attempt to interpret it as the name of the output directory: */
+    if (0 != stat(argv[argc - 1], &st) || S_ISDIR(st.st_mode)) {
         odir = argv[--argc];
+        if (argc - argidx < 1) {
+            LOG(usemsg, argv[0]);
+            exit(EXIT_FAILURE);
+        }
+    }
     else
         odir = "output";
-    fprintf(stderr, "Using \"%s\" as output directory\n", odir);
-
-    if (argc < 2) {
-        fprintf(stderr, usemsg, argv[0]);
-        exit(EXIT_FAILURE);
-    }
-
-    i = 0;
-    if (0 != stat(odir, &st)) {
-        fprintf(stderr, "Creating \"%s\"\n", odir);
+    LOG("Using \"%s\" as output directory\n", odir);
+    i = stat(odir, &st);
+    if (0 != i) {
+        LOG("Creating \"%s\"\n", odir);
         mkdirp(odir, 0755);
         i = stat(odir, &st);
     }
-
     if (0 != i || !S_ISDIR(st.st_mode)) {
-        fprintf(stderr, "%s is not a valid output directory\n", odir);
+        LOG("%s is not a valid output directory\n", odir);
         exit(EXIT_FAILURE);
     }
 
-    for (i = 1; i < argc; i++) {
-        int fd, id;
-        off_t fsize, rsize;
-        uint8_t *mfile, *riff, *next;
+    /* Loop over remaining arguments as input files: */
+    for (i = argidx; i < argc; i++) {
+        int fd, cnt;
         char fpfx[PATH_MAX], tfn[PATH_MAX], *x;
 
-        id = 0;
         fd = -1;
-
         if (0 == stat(argv[i], &st)) {
             if (S_ISREG(st.st_mode))
                 fd = open(argv[i], O_RDONLY);
@@ -221,36 +266,26 @@ int main(int argc, char *argv[]) {
                 errno = ENOTSUP;
         }
         if (fd < 0){
-            fprintf(stderr, "Failed to open %s: %s\n", argv[i], strerror(errno));
+            LOG("Failed to open %s: %s\n", argv[i], strerror(errno));
             continue;
         }
 
-        fprintf(stderr, "Processing %s\n", argv[i]);
+        LOG("Processing %s\n", argv[i]);
         strcpy(tfn, argv[i]);
         if ( NULL != (x = strrchr(tfn, '.')))
             *x = 0;
-#if USE_BASENAME
-        x = strrchr(tfn, '/');
-        snprintf(fpfx, sizeof fpfx, "%s/%03d_%s_", odir, i, x ? x + 1 : tfn);
-#else
-        snprintf(fpfx, sizeof fpfx, "%s/%s/", odir, tfn);
-        mkdirp(fpfx, 0755);
-#endif
-        fsize = lseek(fd, 0, SEEK_END);
-        lseek(fd, 0, SEEK_SET);
-        mfile = mmap(NULL, fsize, PROT_READ, MAP_PRIVATE, fd, 0);
-        riff = mem_mem(mfile, fsize, RIFF, RIFF_LEN);
-        while (NULL != riff) {
-            fprintf(stderr, "\rEntry %d ", id);
-            rsize = fsize - (riff - mfile);
-            next = mem_mem(riff + RIFF_LEN, rsize - RIFF_LEN, RIFF, RIFF_LEN);
-            dump(fpfx, id, riff, next ? next - riff : rsize);
-            riff = next;
-            ++id;
+        if (use_basename) {
+            x = strrchr(tfn, '/');
+            snprintf(fpfx, sizeof fpfx, "%s/%03d_%s_", odir, i, x ? x + 1 : tfn);
         }
-        munmap(mfile, fsize);
+        else {
+            snprintf(fpfx, sizeof fpfx, "%s/%s/", odir, tfn);
+            mkdirp(fpfx, 0755);
+        }
+        LOG("Dumping to %s*\n", fpfx);
+        cnt = extract(fd, fpfx);
         close(fd);
-        fprintf(stderr, "\rDumped %d entries\n", id);
+        LOG("\rDumped %d entries\n", cnt);
     }
 
     exit(EXIT_SUCCESS);
