@@ -33,6 +33,7 @@
  */
 
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
@@ -51,15 +52,6 @@
 /* dump filename suffix */
 #define SUFFIX      ".riff"
 
-/* RIFF marker */
-#define RIFF        "RIFF"
-#define RIFF_LEN    4
-
-/* label marker */
-#define LABL        "labl"
-#define LABL_LEN    4
-#define LABL_SKIP   8
-
 
 #define LOG(...)    fprintf(stderr, __VA_ARGS__)
 
@@ -67,7 +59,7 @@
 /* mkdirp
  * Create a directory and missing parents.
  */
-int mkdirp(const char *pathname, mode_t mode) {
+static inline int mkdirp(const char *pathname, mode_t mode) {
     if (!pathname || !*pathname) {
         errno = ENOENT;
         return -1;
@@ -110,7 +102,7 @@ int mkdirp(const char *pathname, mode_t mode) {
  * For our tiny needles and non-pathologic haystacks this borders on
  * overkill, but meh.
  */
-static void *mem_mem(const void *haystack, size_t hlen,
+static inline void *mem_mem(const void *haystack, size_t hlen,
                      const void *needle, size_t nlen) {
     size_t k, skip[256];
     const uint8_t *hst = (const uint8_t *)haystack;
@@ -136,38 +128,52 @@ static void *mem_mem(const void *haystack, size_t hlen,
     return NULL;
 }
 
+static inline uint32_t get_ui32(const void *p) {
+    const uint8_t *b = p;
+    return b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24;
+}
+
+
+/*
+ * Try to find a suitable "labl" chunk.
+ * We should really parse the RIFF structure.  Instead, we are satisfied
+ * with the first null-terminated label string with length > 0.
+ */
+static inline const char *labl(const void *p, size_t len) {
+    const uint8_t *b;
+    size_t l, ll;
+
+    b = p;
+    l = len;
+    while (l > 8 && NULL != (b = mem_mem(b, l, "labl", 4))) {
+        b += 4;    /* skip 'labl' */
+        l = len - (b - (uint8_t *)p);
+        ll = get_ui32(b);
+        if (ll > l - 4)
+            ll = l - 4;
+        /* The label we want? 200 is a magic number, 6 isn't (ID + 1 + '\0').
+         * We want it null terminated and start with a printable character! */
+        if (ll <= 200 && ll >= 6 && isprint(b[8]) && b[ll+4-1] == '\0')
+            return (const char *)(b + 8); /* skip label size and ID */
+    }
+    return "";
+}
+
 /*
  * Dump RIFF stream.
  * Write a data blob of length len starting at b to a file whose name is
  * constructed from prefix and an extracted label, or, in absence of a
  * label, the provided numeric id.
  */
-static int dump(const char *prefix, size_t id, const uint8_t *b, size_t len) {
+static inline int dump(const char *prefix, size_t id, const void *b, size_t len) {
     int fd;
     char of[strlen(prefix) + 255];
-    const char *lab = NULL;
-    size_t ml = len;
-    const uint8_t *mp = b;
-
-    /* Try to find a suitable "labl" chunk: */
-    while (NULL != (mp = mem_mem(mp, ml, LABL, LABL_LEN))) {
-        size_t ll;
-        mp += LABL_LEN;
-        ll = *(uint32_t *)mp; /* works only on LE arch! */
-        mp += LABL_SKIP;
-        ml = len - (mp - b);
-        /* The label we want? 200 is a magic number, 7 isn't (7 > 4 + 2). */
-        if (ll <= 200 && ll >= 7)
-            lab = (const char *)mp;
-    }
+    const char *lab;
 
     /* Construct file name from prefix and label or id: */
-    if (lab)
-        snprintf(of, sizeof of, "%s%s%s", prefix, lab, SUFFIX);
-    else
-        snprintf(of, sizeof of, "%s%06zu%s", prefix, id, SUFFIX);
-    //LOG("Dumping %lu bytes to %s\n", len, of);
-
+    lab = labl(b, len);
+    snprintf(of, sizeof of, "%s%06zu%s%s%s", prefix, id, *lab?"_":"", lab, SUFFIX);
+    //LOG(" -> %s\n", of);
     /* Caveat: This will overwrite any existing file with the same name! */
     fd = creat(of, 0644);
     if (0 > fd){
@@ -184,9 +190,9 @@ static int dump(const char *prefix, size_t id, const uint8_t *b, size_t len) {
  * Traverse file fd and dump anything that looks like a RIFF stream.
  */
 int extract(int fd, const char *pfx) {
-    size_t id = 0;
-    off_t fsize, rsize;
-    uint8_t *mfile, *riff, *next;
+    size_t id, rsize;
+    off_t fsize, remsize;
+    const uint8_t *riff, *mfile;
 
     fsize = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
@@ -195,17 +201,23 @@ int extract(int fd, const char *pfx) {
         LOG("mmap failed: %s\n", strerror(errno));
         return -1;
     }
-    riff = mem_mem(mfile, fsize, RIFF, RIFF_LEN);
-    while (NULL != riff) {
-        LOG("\rEntry %zu ", id);
-        rsize = fsize - (riff - mfile);
-        next = mem_mem(riff + RIFF_LEN, rsize - RIFF_LEN, RIFF, RIFF_LEN);
-        /* Instead of id we could also pass the file offset (riff-mfile). */
-        dump(pfx, id, riff, next ? next - riff : rsize);
-        riff = next;
+    id = 0;
+    riff = mfile;
+    remsize = fsize;
+    while (remsize > 8 && NULL != (riff = mem_mem(riff, remsize, "RIFF", 4))) {
+        remsize = fsize - (riff - mfile);
+        rsize = get_ui32(riff + 4) + 8; /* + 'RIFF' + uint32 */
+        if ((off_t)rsize > remsize)
+            rsize = remsize;
+        LOG("\rEntry %4zu: %8zu ", id, rsize);
+        dump(pfx, id, riff, rsize);
         ++id;
+        /* Skip 'RIFF'; skipping rsize would be correct, but the size info
+         * isn't always sane, so we rather risk getting false positives. */
+        riff += 4;
+        remsize -= 4;
     }
-    munmap(mfile, fsize);
+    munmap((void *)mfile, fsize);
     return id;
 }
 
@@ -290,7 +302,7 @@ int main(int argc, char *argv[]) {
         LOG("Dumping to %s*\n", fpfx);
         cnt = extract(fd, fpfx);
         close(fd);
-        LOG("\rDumped %d entries\n", cnt);
+        LOG("\rDumped %d entries      \n", cnt);
     }
 
     exit(EXIT_SUCCESS);
