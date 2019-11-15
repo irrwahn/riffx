@@ -147,7 +147,9 @@ static inline uint32_t get_ui32(const void *p) {
 static struct {
     int use_basename;
     int use_label;
+    int verbose;
 } cfg = {
+    0,
     0,
     0,
 };
@@ -156,6 +158,7 @@ static inline void usage(const char *argv0) {
     LOG("Usage: %s [-b] infile ... [outdir]\n"
         "  -b : create flat output directory\n"
         "  -l : use extracted labels in filenames (unreliable!)\n"
+        "  -v : be more verbose\n"
         , argv0);
     exit(EXIT_FAILURE);
 }
@@ -163,13 +166,16 @@ static inline void usage(const char *argv0) {
 static inline int config(int argc, char *argv[]) {
     int opt;
 
-    while ((opt = getopt(argc, argv, "+:bl")) != -1) {
+    while ((opt = getopt(argc, argv, "+:blv")) != -1) {
         switch (opt) {
         case 'b':
            cfg.use_basename = 1;
            break;
         case 'l':
            cfg.use_label = 1;
+           break;
+        case 'v':
+           cfg.verbose = 1;
            break;
         default: /* '?' || ':' */
            usage(argv[0]);
@@ -227,7 +233,8 @@ static inline int dump(const char *prefix, size_t id, const void *b, size_t len)
     /* Construct file name from prefix and label or id: */
     lab = cfg.use_label ? labl(b, len) : "";
     snprintf(of, sizeof of, "%s%06zu%s%s%s", prefix, id, *lab?"_":"", lab, SUFFIX);
-    //LOG(" -> %s\n", of);
+    if (cfg.verbose)
+        LOG(": %8zu -> %s\n", len, of);
     /* Caveat: This will overwrite any existing file with the same name! */
     fd = creat(of, 0644);
     if (0 > fd){
@@ -263,7 +270,7 @@ int extract(int fd, const char *pfx) {
         rsize = get_ui32(riff + 4) + 8; /* + 'RIFF' + uint32 */
         if ((off_t)rsize > remsize)
             rsize = remsize;
-        LOG("\rEntry %4zu: %8zu ", id, rsize);
+        LOG("\rEntry %4zu", id);
         dump(pfx, id, riff, rsize);
         ++id;
         /* Skip 'RIFF'; skipping rsize would be correct, but the size info
