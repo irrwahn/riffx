@@ -142,13 +142,19 @@ static inline uint32_t get_ui32(const void *p) {
  * use_label:
  * 0: create output filename from stream index number only
  * 1: scan for label in stream and use it for output filename
+ *
+ * guess_length:
+ * 0: read the stream length from the RIFF header size field
+ * 1: assume the stream ends at the beginning of the next (or EOF)
  */
 
 static struct {
     int use_basename;
     int use_label;
+    int guess_length;
     int verbose;
 } cfg = {
+    0,
     0,
     0,
     0,
@@ -158,6 +164,7 @@ static inline void usage(const char *argv0) {
     LOG("Usage: %s [-b] infile ... [outdir]\n"
         "  -b : create flat output directory\n"
         "  -l : use extracted labels in filenames (unreliable!)\n"
+        "  -g : ignore size fields, guess stream length (imprecise!)\n"
         "  -v : be more verbose\n"
         , argv0);
     exit(EXIT_FAILURE);
@@ -166,10 +173,13 @@ static inline void usage(const char *argv0) {
 static inline int config(int argc, char *argv[]) {
     int opt;
 
-    while ((opt = getopt(argc, argv, "+:blv")) != -1) {
+    while ((opt = getopt(argc, argv, "+:bglv")) != -1) {
         switch (opt) {
         case 'b':
            cfg.use_basename = 1;
+           break;
+        case 'g':
+           cfg.guess_length = 1;
            break;
         case 'l':
            cfg.use_label = 1;
@@ -263,20 +273,27 @@ int extract(int fd, const char *pfx) {
         return -1;
     }
     id = 0;
-    riff = mfile;
-    remsize = fsize;
-    while (remsize > 8 && NULL != (riff = mem_mem(riff, remsize, "RIFF", 4))) {
-        remsize = fsize - (riff - mfile);
-        rsize = get_ui32(riff + 4) + 8; /* + 'RIFF' + uint32 */
-        if ((off_t)rsize > remsize)
-            rsize = remsize;
-        LOG("\rEntry %4zu", id);
+    riff = mem_mem(mfile, fsize, "RIFF", 4);
+    remsize = fsize - (riff - mfile);
+    while (remsize > 8 && NULL != riff) {
+        const uint8_t *next;
+        next = mem_mem(riff + 4, remsize - 4, "RIFF", 4);
+        /* Read length info or guess stream length: */
+        if (cfg.guess_length) {
+            rsize = next ? next - riff : remsize;
+        }
+        else {
+            rsize = get_ui32(riff + 4) + 8; /* size + 'RIFF' + uint32 */
+            if ((off_t)rsize > remsize)
+                rsize = remsize;
+        }
+        /* Dump RIFF stream: */
+        LOG("\rEntry %5zu", id);
         dump(pfx, id, riff, rsize);
+        /* Skip to next segment: */
         ++id;
-        /* Skip 'RIFF'; skipping rsize would be correct, but the size info
-         * isn't always sane, so we rather risk getting false positives. */
-        riff += 4;
-        remsize -= 4;
+        riff = next;
+        remsize = riff ? fsize - (riff - mfile) : 0;
     }
     munmap((void *)mfile, fsize);
     return id;
@@ -325,7 +342,7 @@ int main(int argc, char *argv[]) {
                 errno = ENOTSUP;
         }
         if (fd < 0){
-            LOG("Failed to open %s: %s\n", argv[i], strerror(errno));
+            LOG("Skipping %s (failed to open: %s)\n", argv[i], strerror(errno));
             continue;
         }
 
