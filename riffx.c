@@ -242,7 +242,7 @@ static inline int dump(const char *prefix, size_t id, const void *b, size_t len)
 
     /* Construct file name from prefix and label or id: */
     lab = cfg.use_label ? labl(b, len) : "";
-    snprintf(of, sizeof of, "%s%06zu%s%s%s", prefix, id, *lab?"_":"", lab, SUFFIX);
+    snprintf(of, sizeof of, "%s%s%s%06zu%s", prefix, lab, *lab?"_":"", id, SUFFIX);
     if (cfg.verbose)
         LOG(": %8zu -> %s\n", len, of);
     /* Caveat: This will overwrite any existing file with the same name! */
