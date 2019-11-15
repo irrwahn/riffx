@@ -135,14 +135,61 @@ static inline uint32_t get_ui32(const void *p) {
 
 
 /*
+ * use_basename:
+ * 0: retain directory structure:   a/b/foo.in -> output/a/b/foo/042.riff
+ * 1: create flat output directory: a/b/foo.in -> output/001_foo_042.riff
+ *
+ * use_label:
+ * 0: create output filename from stream index number only
+ * 1: scan for label in stream and use it for output filename
+ */
+
+static struct {
+    int use_basename;
+    int use_label;
+} cfg = {
+    0,
+    0,
+};
+
+static inline void usage(const char *argv0) {
+    LOG("Usage: %s [-b] infile ... [outdir]\n"
+        "  -b : create flat output directory\n"
+        "  -l : use extracted labels in filenames (unreliable!)\n"
+        , argv0);
+    exit(EXIT_FAILURE);
+}
+
+static inline int config(int argc, char *argv[]) {
+    int opt;
+
+    while ((opt = getopt(argc, argv, "+:bl")) != -1) {
+        switch (opt) {
+        case 'b':
+           cfg.use_basename = 1;
+           break;
+        case 'l':
+           cfg.use_label = 1;
+           break;
+        default: /* '?' || ':' */
+           usage(argv[0]);
+           break;
+        }
+    }
+    return optind;
+}
+
+/*
  * Try to find a suitable "labl" chunk.
  * We should really parse the RIFF structure.  Instead, we are satisfied
  * with the first null-terminated label string with length > 0.
  */
 static inline const char *labl(const void *p, size_t len) {
+    static char lab[201] = "";
     const uint8_t *b;
     size_t l, ll;
 
+    *lab = '\0';
     b = p;
     l = len;
     while (l > 8 && NULL != (b = mem_mem(b, l, "labl", 4))) {
@@ -153,10 +200,17 @@ static inline const char *labl(const void *p, size_t len) {
             ll = l - 4;
         /* The label we want? 200 is a magic number, 6 isn't (ID + 1 + '\0').
          * We want it null terminated and start with a printable character! */
-        if (ll <= 200 && ll >= 6 && isprint(b[8]) && b[ll+4-1] == '\0')
-            return (const char *)(b + 8); /* skip label size and ID */
+        if (ll <= 200 && ll >= 6 && isprint(b[8]) && b[ll+4-1] == '\0') {
+            strcpy(lab, (const char *)(b + 8)); /* skip label size and ID */
+            break;
+        }
     }
-    return "";
+    /* Sanitize label */
+    for (char *p = lab; *p; ++p) {
+        if (!isprint((unsigned char)*p) || strchr("/\\ ", *p))
+            *p = '_';
+    }
+    return lab;
 }
 
 /*
@@ -171,7 +225,7 @@ static inline int dump(const char *prefix, size_t id, const void *b, size_t len)
     const char *lab;
 
     /* Construct file name from prefix and label or id: */
-    lab = labl(b, len);
+    lab = cfg.use_label ? labl(b, len) : "";
     snprintf(of, sizeof of, "%s%06zu%s%s%s", prefix, id, *lab?"_":"", lab, SUFFIX);
     //LOG(" -> %s\n", of);
     /* Caveat: This will overwrite any existing file with the same name! */
@@ -223,38 +277,19 @@ int extract(int fd, const char *pfx) {
 
 int main(int argc, char *argv[]) {
     int i, argidx = 1;
-    int use_basename = 0;
     const char *odir;
     struct stat st;
-    const char *usemsg = "Usage: %s [-b] infile ... [outdir]\n"
-                         "  -b : create flat output hierarchy\n";
 
-    if (argc - argidx < 1) {
-        LOG(usemsg, argv[0]);
-        exit(EXIT_FAILURE);
-    }
-
-    /* Check for -b (use basename) option:
-     * 0: retain directory structure:   a/b/foo.in -> output/a/b/foo/042.riff
-     * 1: create flat output directory: a/b/foo.in -> output/001_foo_042.riff
-     */
-    if (0 == strcmp(argv[argidx], "-b")) {
-        use_basename = 1;
-        ++argidx;
-    }
-    if (argc - argidx < 1) {
-        LOG(usemsg, argv[0]);
-        exit(EXIT_FAILURE);
-    }
+    argidx = config(argc, argv);
+    if (argc - argidx < 1)
+        usage(argv[0]);
 
     /* If the last argument does not designate an existing file, we
      * attempt to interpret it as the name of the output directory: */
     if (0 != stat(argv[argc - 1], &st) || S_ISDIR(st.st_mode)) {
         odir = argv[--argc];
-        if (argc - argidx < 1) {
-            LOG(usemsg, argv[0]);
-            exit(EXIT_FAILURE);
-        }
+        if (argc - argidx < 1)
+            usage(argv[0]);
     }
     else
         odir = "output";
@@ -291,15 +326,16 @@ int main(int argc, char *argv[]) {
         strcpy(tfn, argv[i]);
         if ( NULL != (x = strrchr(tfn, '.')))
             *x = 0;
-        if (use_basename) {
+        if (cfg.use_basename) {
             x = strrchr(tfn, '/');
-            snprintf(fpfx, sizeof fpfx, "%s/%03d_%s_", odir, i, x ? x + 1 : tfn);
+            x = x ? x : tfn;
+            snprintf(fpfx, sizeof fpfx, "%s/%03d_%s_", odir, i - argidx, x);
         }
         else {
             snprintf(fpfx, sizeof fpfx, "%s/%s/", odir, tfn);
             mkdirp(fpfx, 0755);
         }
-        LOG("Dumping to %s*\n", fpfx);
+        LOG("Dumping to %s...\n", fpfx);
         cnt = extract(fd, fpfx);
         close(fd);
         LOG("\rDumped %d entries      \n", cnt);
