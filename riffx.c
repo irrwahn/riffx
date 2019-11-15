@@ -288,7 +288,7 @@ int extract(int fd, const char *pfx) {
                 rsize = remsize;
         }
         /* Dump RIFF stream: */
-        LOG("\rEntry %5zu", id);
+        LOG("%sEntry %5zu", cfg.verbose?"":"\r", id);
         dump(pfx, id, riff, rsize);
         /* Skip to next segment: */
         ++id;
@@ -300,7 +300,7 @@ int extract(int fd, const char *pfx) {
 }
 
 int main(int argc, char *argv[]) {
-    int i, argidx = 1;
+    int i, total, argidx = 1;
     const char *odir;
     struct stat st;
 
@@ -330,7 +330,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* Loop over remaining arguments as input files: */
-    for (i = argidx; i < argc; i++) {
+    for (total = 0, i = argidx; i < argc; i++) {
         int fd, cnt;
         char fpfx[PATH_MAX], tfn[PATH_MAX], *x;
 
@@ -362,8 +362,10 @@ int main(int argc, char *argv[]) {
         LOG("Dumping to %s...\n", fpfx);
         cnt = extract(fd, fpfx);
         close(fd);
-        LOG("\rDumped %d entries      \n", cnt);
+        LOG("%sDumped %d entries      \n", cfg.verbose?"":"\r", cnt);
+        total += cnt;
     }
+    LOG("\rDumped a total of %d entries.\n", total);
 
     exit(EXIT_SUCCESS);
 }
