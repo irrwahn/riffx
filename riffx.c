@@ -10,11 +10,11 @@
  * Traverse input file(s) and dump anything that looks remotely like a
  * RIFF data stream into separate output files, named using extracted
  * labels, if applicable.  Useful e.g. for extracting audio streams from
- * game files like Unreal *.pck.
+ * game files like Borderlands2 *.pck.
  *
  * NOTE: The extracted raw RIFF streams most likely will need some form
  * of post-processing to be useful.  E.g. for the Audiokinetic Wwise
- * RIFF/RIFX sound format (Unreal Engine 3, et al.) you should:
+ * RIFF/RIFX sound format you should:
  *
  *   1. Run each dumped file through the ww2ogg converter.
  *      [ See https://github.com/hcs64/ww2ogg ]
