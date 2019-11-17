@@ -11,7 +11,7 @@ riffx: riffx.c
 	strip riffx
 
 unriffle: unriffle.c
-	$(CC) $(CFLAGS) -o unriffle unriffle.c
+	$(CC) -std=c99 -Wpedantic $(CFLAGS) -o unriffle unriffle.c
 	strip unriffle
 
 ww2ogg/ww2ogg:
@@ -22,5 +22,5 @@ revorb-nix/revorb: revorb-nix/revorb.cpp
 
 clean:
 	rm -f *.o riffx unriffle
+	rm revorb-nix/revorb 2>/dev/null ||:
 	cd ww2ogg && $(MAKE) clean
-	cd revorb-nix && rm revorb 2>/dev/null ||:
