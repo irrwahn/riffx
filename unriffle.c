@@ -39,7 +39,7 @@ static inline void xdump(const void *s, size_t n) {
         ++i;
         if (i % 16 == 0) {
             *a++ = '\0';
-            fprintf(cfg.dump_fp, "%14zu: %s\n", i - 16, buf);
+            fprintf(cfg.dump_fp, "    %14zu: %s\n", i - 16, buf);
             memset(buf, ' ', sizeof buf);
             b = buf;
             a = buf + 51;
@@ -52,7 +52,7 @@ static inline void xdump(const void *s, size_t n) {
     }
     if (b != buf) {
         *a++ = '\0';
-        fprintf(cfg.dump_fp, "%14zu: %s\n", (i - 1) / 16 * 16, buf);
+        fprintf(cfg.dump_fp, "    %14zu: %s\n", (i - 1) / 16 * 16, buf);
     }
 }
 
@@ -94,7 +94,7 @@ static inline void dump4cc(const char *s, fcc_t fcc) {
     fcc_t f;
     for (size_t i = 0; i < sizeof f; i++)
         f[i] = isprint((unsigned char)fcc[i]) ? fcc[i] : '?';
-    DMP("[4] %14s: ", s);  DMP("%4.4s\n", f);
+    DMP("[4] %14s: %4.4s\n", s, f);
 }
 
 static inline void dump4ccEnd(const char *s, fcc_t fcc) {
@@ -105,15 +105,15 @@ static inline void dump4ccEnd(const char *s, fcc_t fcc) {
 }
 
 static inline void dumpU16(const char *s, const void *u) {
-    DMP("[2] %14s: ", s);  DMP("%"PRIu16"\n", get_ui16(u));
+    DMP("[2] %14s: %"PRIu16"\n", s, get_ui16(u));
 }
 
 static inline void dumpU32(const char *s, const void *u) {
-    DMP("[4] %14s: ", s);  DMP("%"PRIu32"\n", get_ui32(u));
+    DMP("[4] %14s: %"PRIu32"\n", s, get_ui32(u));
 }
 
 static inline void dumpStr(const char *s, const void *u) {
-    DMP("%14s: ", s);  DMP("%s\n", (const char *)u);
+    DMP("    %14s: %s\n", s, (const char *)u);
 }
 
 static int rdump(void *p, size_t fsize) {
@@ -160,8 +160,10 @@ static int rdump(void *p, size_t fsize) {
         dumpU32("Avg. Bytes/s", r->data+8);
         dumpU16("Block align", r->data+12);
         dumpU16("Signif. bit/s", r->data+14 );
-        dumpU16("Xtra FMT bytes", r->data+16);
-        xdump(r->data+18, sz-18);
+        if (sz > 16) {
+            dumpU16("Xtra FMT bytes", r->data+16);
+            xdump(r->data+18, sz-18);
+        }
     }
     else if (sz <= fsize) {
         xdump(r->data, sz);
