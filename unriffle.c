@@ -1,3 +1,19 @@
+/*
+ * Copyright 2019 Urban Wallasch <irrwahn35@freenet.de>
+ *
+ * Licensed under the terms of the 0BSD ("Zero-clause BSD") license.
+ * See LICENSE file for details.
+ */
+
+/*
+ * Sequentially dump the chunks contained in a RIFF/RIFX file to stdout.
+ *
+ * A tiny subset of chunk types that may be present in some audio files
+ * is given a special treatment to make them more readable to mere humans.
+ * This may help to get an idea about the kind of data contained.
+ *
+ */
+
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>

@@ -1,5 +1,8 @@
 /*
- * Original code copyright (c) 2019, volpol.
+ * Copyright (c) 2019 volpol, Urban Wallasch <irrwahn35@freenet.de>
+ *
+ * Licensed under the terms of the 0BSD ("Zero-clause BSD") license.
+ * See LICENSE file for details.
  *
  * Changes 2019 by irrwahn:
  *  - renamed wsp.c to riffx.c
