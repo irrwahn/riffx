@@ -154,10 +154,10 @@ static struct {
 };
 
 static inline void usage(const char *argv0) {
-    LOG("Usage: %s [-b] infile ... [outdir]\n"
+    LOG("Usage: %s [-b] [-g] [-l] [-v] infile ... [outdir]\n"
         "  -b : create flat output directory\n"
-        "  -l : use extracted labels in filenames (unreliable!)\n"
         "  -g : ignore size fields, guess stream length (imprecise!)\n"
+        "  -l : use extracted labels in filenames (unreliable!)\n"
         "  -v : be more verbose\n"
         , argv0);
     exit(EXIT_FAILURE);
