@@ -33,43 +33,23 @@ static struct {
     0,
 };
 
+typedef uint8_t fcc_t[4];
 
-/*
- * dump helper:
- */
+#define FOURCC_IS(p_,q_) (!memcmp((const void *)(p_),(const void *)(q_),4))
 
-static const char *hdig = "0123456789abcdef";
-
-static inline void xdump(const void *s, size_t n) {
-    const unsigned char *p = s;
-    char buf[68];
-    char *b = buf;
-    char *a = buf + 51;
-    size_t i = 0;
-
-    memset(buf, ' ', sizeof buf);
-    while (i < n) {
-        *b++ = hdig[p[i] / 16];
-        *b++ = hdig[p[i] % 16];
-        *a++ = isgraph(p[i]) ? p[i] : '.';
-        ++i;
-        if (i % 16 == 0) {
-            *a++ = '\0';
-            fprintf(cfg.dump_fp, "    %14zu: %s\n", i - 16, buf);
-            memset(buf, ' ', sizeof buf);
-            b = buf;
-            a = buf + 51;
-        }
-        else {
-            if (i % 8 == 0)
-                *b++ = ' ';
-            *b++ = ' ';
-        }
+typedef
+    struct RIFF_chunk_t {
+        fcc_t fcc;
+        uint32_t csize;
+        uint8_t data[];
     }
-    if (b != buf) {
-        *a++ = '\0';
-        fprintf(cfg.dump_fp, "    %14zu: %s\n", (i - 1) / 16 * 16, buf);
-    }
+    RIFF_chunk_t;
+
+static size_t filesize = 0;
+static void *fbuf;
+
+static inline size_t boff(const void *p, const void *b) {
+    return (size_t)((const uint8_t *)p - (const uint8_t *)b);
 }
 
 /* Little/Big Endian to native uint32 conversion: */
@@ -90,70 +70,108 @@ static inline uint16_t get_ui16(const void *p) {
     return b[1] | b[0] << 8;
 }
 
+/*
+ * dump helper:
+ */
 #define LOG(...)  (fprintf(cfg.log_fp,__VA_ARGS__))
 #define DIE(...)  do{LOG(__VA_ARGS__);exit(EXIT_FAILURE);}while(0)
 #define DMP(...)  (fprintf(cfg.dump_fp,__VA_ARGS__))
 
-#define FOURCC_IS(p_,q_) (!memcmp((const void *)(p_),(const void *)(q_),4))
+static const char *hdig = "0123456789abcdef";
 
-typedef uint8_t fcc_t[4];
+static inline void xdump(const void *s, size_t n) {
+    const unsigned char *p = s;
+    char buf[68];
+    char *b = buf;
+    char *a = buf + 51;
+    size_t i = 0;
 
-typedef
-    struct RIFF_chunk_t {
-        fcc_t fcc;
-        uint32_t csize;
-        uint8_t data[];
+    memset(buf, ' ', sizeof buf);
+    while (i < n) {
+        *b++ = hdig[p[i] / 16];
+        *b++ = hdig[p[i] % 16];
+        *a++ = isgraph(p[i]) ? p[i] : '.';
+        ++i;
+        if (i % 16 == 0) {
+            *a++ = '\0';
+            fprintf(cfg.dump_fp, "[%8zu] %14zu: %s\n", boff(p+i-16, fbuf), i - 16, buf);
+            memset(buf, ' ', sizeof buf);
+            b = buf;
+            a = buf + 51;
+        }
+        else {
+            if (i % 8 == 0)
+                *b++ = ' ';
+            *b++ = ' ';
+        }
     }
-    RIFF_chunk_t;
+    if (b != buf) {
+        *a++ = '\0';
+        fprintf(cfg.dump_fp, "[%8zu] %14zu: %s\n", boff(p+i-(i%16), fbuf), (i - 1) / 16 * 16, buf);
+    }
+}
 
 static inline void dump4cc(const char *s, fcc_t fcc) {
     fcc_t f;
     for (size_t i = 0; i < sizeof f; i++)
         f[i] = isprint((unsigned char)fcc[i]) ? fcc[i] : '?';
-    DMP("[4] %14s: %4.4s\n", s, f);
+    DMP("[%8zu] %14s: %4.4s\n", boff(fcc, fbuf), s, f);
 }
 
-static inline void dump4ccEnd(const char *s, fcc_t fcc) {
+static inline void dump4ccEnd(const void *p, fcc_t fcc) {
     fcc_t f;
     for (size_t i = 0; i < sizeof f; i++)
         f[i] = isprint((unsigned char)fcc[i]) ? fcc[i] : '?';
-    DMP("    %14s: [%4.4s end]\n", s, f);
+    DMP("[%8zu]      [%4.4s end]\n", boff(p, fbuf), f);
 }
 
 static inline void dumpU16(const char *s, const void *u) {
-    DMP("[2] %14s: %"PRIu16"\n", s, get_ui16(u));
+    DMP("[%8zu] %14s: %"PRIu16"\n", boff(u, fbuf), s, get_ui16(u));
 }
 
 static inline void dumpU32(const char *s, const void *u) {
-    DMP("[4] %14s: %"PRIu32"\n", s, get_ui32(u));
+    DMP("[%8zu] %14s: %"PRIu32"\n", boff(u, fbuf), s, get_ui32(u));
 }
 
 static inline void dumpStr(const char *s, const void *u) {
-    DMP("    %14s: %s\n", s, (const char *)u);
+    DMP("[%8zu] %14s: %s\n", boff(u, fbuf), s, (const char *)u);
 }
 
 static int rdump(void *p, size_t fsize) {
     RIFF_chunk_t *r = p;
-    uint32_t sz = get_ui32(&r->csize);
+    uint32_t sz;
 
-    if (!fsize || !sz) {
+    if (fsize < 8)
         return 0;
-    }
+    sz = get_ui32(&r->csize);
+    if (sz < 2)
+        return 0;
+    if (sz > fsize)
+        return -1;
     DMP("\n");
     dump4cc("Chunk ID", r->fcc);
     dumpU32("Size", &r->csize);
+
     if (FOURCC_IS(&r->fcc, "RIFF") || FOURCC_IS(&r->fcc, "RIFX")) {
         dump4cc("RIFF Type", r->data);
-        rdump(r->data + sizeof(fcc_t), fsize - sizeof(fcc_t));
+        rdump(r->data + sizeof(fcc_t), sz);
+        dump4ccEnd(r->data + sz, r->fcc);
+        if (fsize > sz + 8 ) {
+            DMP("\nExtra Bytes at end of file:\n");
+            xdump(r->data + sz, fsize - (sz + 8));
+        }
+        return 0;
     }
     else if (FOURCC_IS(&r->fcc, "LIST")) {
         dump4cc("Form Type", r->data);
         rdump(r->data + sizeof(fcc_t), sz - sizeof(fcc_t));
     }
-    else if (FOURCC_IS(&r->fcc, "labl")) {
-        dumpU32("Label ID", r->data);
+    else if (FOURCC_IS(&r->fcc, "labl") || FOURCC_IS(&r->fcc, "note")) {
+        dumpU32("Cue Point ID", r->data);
         dumpStr("Label Text", r->data + 4);
-        sz += 8;
+        fsize -= 8;
+        if (sz % 2)  /* Take care of padding. */
+            ++sz;
     }
     else if (FOURCC_IS(&r->fcc, "cue ")) {
         uint32_t cn = get_ui32(r->data);
@@ -161,7 +179,7 @@ static int rdump(void *p, size_t fsize) {
         for (uint32_t i = 0; i < cn; ++i) {
             uint8_t *c;
             c = r->data + i * 24 + 4;
-            dumpU32("Cue ID", c);
+            dumpU32("Cue Point ID", c);
             dumpU32("Cue Position", c+4);
             dump4cc("Data Chunk ID", c + 8);
             dumpU32("Chunk Start", c+12);
@@ -171,7 +189,7 @@ static int rdump(void *p, size_t fsize) {
     }
     else if (FOURCC_IS(&r->fcc, "fmt ")) {
         dumpU16("Compression", r->data);
-        dumpU16("# Channels", r->data+2);
+        dumpU16("Channels", r->data+2);
         dumpU32("Sample Rate", r->data+4);
         dumpU32("Avg. Bytes/s", r->data+8);
         dumpU16("Block align", r->data+12);
@@ -184,19 +202,12 @@ static int rdump(void *p, size_t fsize) {
     else if (sz <= fsize) {
         xdump(r->data, sz);
     }
-    else {
-        /* Garbage beyond expected EOF: */
-        xdump(r->data, fsize);
-        return -1;
-    }
-    dump4ccEnd("==============", r->fcc);
+    dump4ccEnd(r->data + sz, r->fcc);
     return rdump(r->data + sz, fsize - sz);
 }
 
 int main(int argc, char *argv[]) {
     FILE *ifp = stdin;
-    size_t fsize = 0;
-    void *buf;
     RIFF_chunk_t *r;
     size_t nrd;
 
@@ -207,16 +218,16 @@ int main(int argc, char *argv[]) {
         if (!ifp)
             DIE("fopen %s: %s\n", argv[1], strerror(errno));
         fseek(ifp, 0, SEEK_END);
-        fsize = ftell(ifp);
+        filesize = ftell(ifp);
         rewind(ifp);
     }
-    buf = malloc(fsize);
-    if (!buf)
+    fbuf = malloc(filesize);
+    if (!fbuf)
         DIE("malloc: %s\n", strerror(errno));
-    nrd = fread(buf, 1, fsize, ifp);
-    if (ferror(ifp) || nrd != fsize)
+    nrd = fread(fbuf, 1, filesize, ifp);
+    if (ferror(ifp) || nrd != filesize)
         DIE("read: %s\n", strerror(errno));
-    r = buf;
+    r = fbuf;
 
     if (!FOURCC_IS(r->fcc, "RIFF")) {
         if (!FOURCC_IS(r->fcc, "RIFX"))
@@ -224,10 +235,11 @@ int main(int argc, char *argv[]) {
         cfg.endianess = 1;
     }
 
-    DMP("File name: %s\n", argv[1]);
-    DMP("File size: %zu\n", fsize);
-    rdump(r, fsize);
-    free(buf);
+    DMP("         %14s: %s\n", "File name", argv[1]);
+    DMP("         %14s: %zu\n", "File size", filesize);
+    DMP("\nBYTE OFFSET         FIELD  VALUE\n");
+    rdump(r, filesize);
+    free(fbuf);
     exit(EXIT_SUCCESS);
 }
 
