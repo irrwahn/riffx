@@ -49,10 +49,6 @@
 #include <sys/stat.h>
 
 
-/* dump filename suffix */
-#define SUFFIX      ".riff"
-
-
 #define LOG(...)    fprintf(stderr, __VA_ARGS__)
 
 
@@ -128,11 +124,6 @@ static inline void *mem_mem(const void *haystack, size_t hlen,
     return NULL;
 }
 
-static inline uint32_t get_ui32(const void *p) {
-    const uint8_t *b = p;
-    return b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24;
-}
-
 
 /*
  * use_basename:
@@ -153,7 +144,9 @@ static struct {
     int use_label;
     int guess_length;
     int verbose;
+    int endianess; /* No cmd line option for this, we figure it out. */
 } cfg = {
+    0,
     0,
     0,
     0,
@@ -195,6 +188,14 @@ static inline int config(int argc, char *argv[]) {
     return optind;
 }
 
+static inline uint32_t get_ui32(const void *p) {
+    const uint8_t *b = p;
+    if (!cfg.endianess)     /* Little Endian byte order (RIFF) */
+        return b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24;
+    /* Big Endian byte order (RIFX) */
+    return b[3] | b[2] << 8 | b[1] << 16 | b[0] << 24;
+}
+
 /*
  * Try to find a suitable "labl" chunk.
  * We should really parse the RIFF structure.  Instead, we are satisfied
@@ -232,17 +233,18 @@ static inline const char *labl(const void *p, size_t len) {
 /*
  * Dump RIFF stream.
  * Write a data blob of length len starting at b to a file whose name is
- * constructed from prefix and an extracted label, or, in absence of a
- * label, the provided numeric id.
+ * constructed from prefix, an optional label, a numeric id and a suffix.
  */
 static inline int dump(const char *prefix, size_t id, const void *b, size_t len) {
     int fd;
+    const char *suffix[] = {"riff", "rifx"};  /* dump filename suffix */
     char of[strlen(prefix) + 255];
     const char *lab;
 
     /* Construct file name from prefix and label or id: */
     lab = cfg.use_label ? labl(b, len) : "";
-    snprintf(of, sizeof of, "%s%s%s%06zu%s", prefix, lab, *lab?"_":"", id, SUFFIX);
+    snprintf(of, sizeof of, "%s%s%s%06zu.%s",
+                    prefix, lab, *lab?"_":"", id, suffix[cfg.endianess]);
     if (cfg.verbose)
         LOG(": %8zu -> %s\n", len, of);
     /* Caveat: This will overwrite any existing file with the same name! */
@@ -261,6 +263,7 @@ static inline int dump(const char *prefix, size_t id, const void *b, size_t len)
  * Traverse file fd and dump anything that looks like a RIFF stream.
  */
 int extract(int fd, const char *pfx) {
+    const char *RIF_[] = {"RIFF", "RIFX"};
     size_t id, rsize;
     off_t fsize, remsize;
     const uint8_t *riff, *mfile;
@@ -273,11 +276,16 @@ int extract(int fd, const char *pfx) {
         return -1;
     }
     id = 0;
-    riff = mem_mem(mfile, fsize, "RIFF", 4);
+    /* Where there's no RIFF, there might be a RIFX ... */
+    for (cfg.endianess = 0; cfg.endianess < 2; ++cfg.endianess )
+        if (NULL != (riff = mem_mem(mfile, fsize, RIF_[cfg.endianess], 4)))
+            break;
+    if (!riff)  /* ... or nothing at all. */
+        return 0;
     remsize = fsize - (riff - mfile);
     while (remsize > 8 && NULL != riff) {
         const uint8_t *next;
-        next = mem_mem(riff + 4, remsize - 4, "RIFF", 4);
+        next = mem_mem(riff + 4, remsize - 4, RIF_[cfg.endianess], 4);
         /* Read length info or guess stream length: */
         if (cfg.guess_length) {
             rsize = next ? next - riff : remsize;
