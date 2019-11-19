@@ -64,6 +64,10 @@ static inline uint16_t get_ui16(const void *p) {
     return b[1] | b[0] << 8;
 }
 
+static inline uint8_t get_ui8(const void *p) {
+    return *(const uint8_t *)p;
+}
+
 /*
  * dump helper:
  */
@@ -123,6 +127,11 @@ static inline void dump4ccEnd(const void *p, fcc_t fcc, const void *basep) {
     DMP("   ['%4.4s' end]\n", f);
 }
 
+static inline void dumpU8(const char *s, const void *u, const void *basep) {
+    DMPO(u, basep);
+    DMP("%14s: %"PRIu8"\n", s, get_ui8(u));
+}
+
 static inline void dumpU16(const char *s, const void *u, const void *basep) {
     DMPO(u, basep);
     DMP("%14s: %"PRIu16"\n", s, get_ui16(u));
@@ -171,8 +180,6 @@ static int rdump(void *p, size_t fsize, const void *basep) {
         dumpU32("Cue Point ID", r->data, basep);
         dumpStr("Label Text", r->data + 4, basep);
         fsize -= 8;
-        if (sz % 2)  /* Take care of padding. */
-            ++sz;
     }
     else if (FOURCC_IS(&r->fcc, "cue ")) {
         uint32_t cn = get_ui32(r->data);
@@ -204,6 +211,11 @@ static int rdump(void *p, size_t fsize, const void *basep) {
         xdump(r->data, sz, basep);
     }
     dump4ccEnd(r->data + sz, r->fcc, basep);
+    /* Take care of chunk padding: */
+    if (sz % 2) {
+        dumpU8("Padding Byte", r->data + sz, basep);
+        ++sz;
+    }
     return rdump(r->data + sz, fsize - sz, basep);
 }
 
