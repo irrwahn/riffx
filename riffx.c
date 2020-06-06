@@ -363,16 +363,16 @@ int main(int argc, char *argv[]) {
             *x = 0;
         if (cfg.use_basename) {
             x = strrchr(tfn, '/');
-            x = x ? x : tfn;
+            x = x ? x + 1 : tfn;
             n = snprintf(fpfx, sizeof fpfx, "%s/%03d_%s_", odir, i - argidx, x);
         }
         else {
             n = snprintf(fpfx, sizeof fpfx, "%s/%s/", odir, tfn);
         }
-	if ( (size_t)n >= sizeof fpfx ) {
-	    LOG("output directory path truncated: '%s'\n", fpfx);
-	    exit(EXIT_FAILURE);
-	}
+        if ( (size_t)n >= sizeof fpfx ) {
+            LOG("output directory path truncated: '%s'\n", fpfx);
+            exit(EXIT_FAILURE);
+        }
         if (!cfg.use_basename)
             mkdirp(fpfx, 0755);
         LOG("Dumping to %s...\n", fpfx);
